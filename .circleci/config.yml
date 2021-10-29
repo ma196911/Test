@@ -30,4 +30,4 @@ jobs:
       - checkout
 
       # run tests!
-      - run: java Test/src/CircleText.java
+      - run: javac Test/src/CircleText.java
