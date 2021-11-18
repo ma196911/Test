@@ -1,36 +1,276 @@
-# Use the latest 2.1 version of CircleCI pipeline process engine.
-# See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
+orbs:
+  aws-ecr: circleci/aws-ecr@6.15.2
+  aws-eks: circleci/aws-eks@1.0.3
+  kubernetes: circleci/kubernetes@0.11.2
 
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
-  # Below is the definition of your job to build and test your app, you can rename and customize it as you want.
-  build-and-test:
-    # These next lines define a Docker executor: https://circleci.com/docs/2.0/executor-types/
-    # You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
-    # Be sure to update the Docker image tag below to openjdk version of your application.
-    # A list of available CircleCI Docker Convenience Images are available here: https://circleci.com/developer/images/image/cimg/openjdk
+  sonarqube:
+    environment:
+    working_directory: /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}
     docker:
-      - image: cimg/openjdk:11.0
-    # Add steps to the job
-    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
+      - image: circleci/openjdk:11.0.3-jdk-stretch
     steps:
-      # Checkout the code as the first step.
       - checkout
-      # Use mvn clean and package as the standard maven build phase
       - run:
-          name: Build
-          command: mvn -B -DskipTests clean package
-      # Then run your tests!
+          name: analyze by SonarQube
+          command: |
+            chmod 777 ./gradlew
+            ./gradlew sonarqube -x test \
+            -Dsonar.projectKey=circlecitest \
+            -Dsonar.host.url=http://18.180.83.54:9000 \
+            -Dsonar.login=666c0555b1477843e299d22d1f3c87ef9ee49198
       - run:
-          name: Test
-          command: mvn test
+          name: get status
+          command: |
+            curl -u admin:R9YtPPv2As2V "http://18.180.83.54:9000/api/qualitygates/project_status?projectKey=circlecitest" > status
+            grep -wq "ERROR" status && SONARQUBE_STATUS="Failed" || SONARQUBE_STATUS="Success"
+            mkdir workspace
+            echo $SONARQUBE_STATUS > workspace/step
+            echo $SONARQUBE_STATUS
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - step
+      - attach_workspace:
+          at: /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace
+      - run:
+          name: Send Success Result To GitHub
+          command: |
+            export STATUS=$(cat /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace/step)
+            ./.circleci/SonarQubeGitHub.sh ${GITHUB_ACCESSTOKEN} success circlecitest $STATUS
+      - run:
+          name: Send Failed Result To GitHub
+          command: |
+            ./.circleci/SonarQubeGitHub.sh ${GITHUB_ACCESSTOKEN} failure circlecitest $STATUS
+          when: on_fail
+  build-application:
+    parallelism: 1
+    environment:
+      _JAVA_OPTIONS: "-Xmx3g"
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.workers.max=1"
+    docker:
+      - image: circleci/openjdk:11.0.3-jdk-stretch
+    working_directory: /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}
+    steps:
+      - checkout
+      - restore_cache:
+          key: v1-gradle-{{ .Environment.CACHE_KEY }}-wrapper-{{ checksum "gradle/wrapper/gradle-wrapper.properties" }}
+      - restore_cache:
+          key: v1-gradle-{{ .Environment.CACHE_KEY }}-cache-{{ checksum "build.gradle" }}
+      - run:
+          name: Run tests iRcn parallel
+          command: |
+            mkdir workspace
+            echo 'Test' > workspace/step
+            chmod 777 ./gradlew
+            ./gradlew test
+            #cp -R build/reports src/main/resources
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - step
+      - run:
+          name: Set Build number in workspace
+          command: |
+            echo $CIRCLE_BUILD_NUM > workspace/buildnum
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - buildnum
+      - store_artifacts:
+          path: build/reports
+          when: on_success
+      - save_cache:
+          paths:
+            - ~/.gradle/{{ .Environment.CACHE_KEY }}/wrapper
+          key: v1-gradle-{{ .Environment.CACHE_KEY }}-wrapper-{{ checksum "gradle/wrapper/gradle-wrapper.properties" }}
+      - save_cache:
+          paths:
+            - ~/.gradle/{{ .Environment.CACHE_KEY }}/caches
+          key: v1-gradle-{{ .Environment.CACHE_KEY }}-cache-{{ checksum "build.gradle" }}
+      - store_test_results:
+          path: build/test-results/test
+      - store_artifacts:
+          path: build/test-results/test
+          when: on_success
+      - run:
+          name: Gradlew Assemble
+          command: |
+            echo 'Build' > workspace/step
+            ./gradlew assemble
+      - persist_to_workspace:
+          root: workspace
+          paths:
+            - step
+      - store_artifacts:
+          path: build/libs
+          destination: artifact-file
+      - attach_workspace:
+          at: /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace
+      - run:
+          name: Send Failed Result To Teams
+          command: |
+            if [ $CIRCLE_NODE_INDEX == 0 ]; then
+            export STEP=$(cat /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace/step)
+            export BUILD_NUM=$(cat /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace/buildnum)
+            ./.circleci/notifyTeams.sh $STEP $CIRCLE_BUILD_NUM Failed
+            fi
+          when: on_fail
+  deploy-application:
+    executor: aws-eks/python3
+    parameters:
+      cluster-name:
+        description: |
+          Name of the EKS cluster
+        type: string
+      docker-image-name:
+        description: |
+          Name of the docker image to be deployed
+        type: string
+      version-info:
+        description: |
+          App version information
+        type: string
+      aws-region:
+        description: |
+          AWS region
+        type: string
+        default: ""
+      show-kubectl-command:
+        description: |
+          Whether to show the kubectl command used.
+        type: boolean
+        default: false
+      resource-name:
+        type: string
+      namespace:
+        type: string
+        default: backend
+    steps:
+      - checkout
+      - run:
+          name: Test param
+          command: |
+            echo << parameters.docker-image-name >>
+            echo "<< parameters.docker-image-name >>"
+      - run:
+          name: Create deployment manifest
+          command: |
+            # Replace the placeholders in the manifest with the intended values.
+            # This is to avoid hardcoding the image name in the manifest, to make this
+            # demo project more portable.
+            BUILD_DATE=$(date '+%Y%m%d%H%M%S')
+            cat deployment/deployment.yaml |\
+               sed "s|DOCKER_IMAGE_NAME|<< parameters.docker-image-name >>|g" > deployment/deployment_replace.yaml && \
+               mv deployment/deployment_replace.yaml deployment/deployment.yaml
+      - aws-eks/update-kubeconfig-with-authenticator:
+          cluster-name: << parameters.cluster-name >>
+          install-kubectl: true
+          aws-region: << parameters.aws-region >>
+      - kubernetes/create-or-update-resource:
+          resource-file-path: "deployment/deployment.yaml"
+          get-rollout-status: true
+          namespace: backend
+          resource-name: << parameters.resource-name >>
+      - kubernetes/create-or-update-resource:
+          resource-file-path: "deployment/deployment.yaml"
 
-# Invoke jobs via workflows
-# See: https://circleci.com/docs/2.0/configuration-reference/#workflows
+      - run:
+          command: |
+            RESOURCE_NAME="<< parameters.resource-name >>"
+            NAMESPACE="<< parameters.namespace >>"
+            if [ -n "${RESOURCE_NAME}" ]; then
+              set -- "$@" "--resource-name=${RESOURCE_NAME}"
+            fi
+            if [ -n "${NAMESPACE}" ]; then
+              set -- "$@" "--namespace=${NAMESPACE}"
+            fi
+            kubectl rollout undo "$@"
+          name: Rollback the resource
+          when: on_fail
+
+      - attach_workspace:
+          at: /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace
+      - run:
+          name: Send Failed Result To Teams
+          command: |
+            export BUILD_NUM=$(cat /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace/buildnum)
+            ./.circleci/notifyTeams.sh DeployFailed $BUILD_NUM Failed
+          when: on_fail
+      - run:
+          name: Send Success Result To Teams
+          when: on_success
+          command: |
+            export BUILD_NUM=$(cat /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace/buildnum)
+            ./.circleci/notifyTeams.sh DeploySuccess $BUILD_NUM Success
+
 workflows:
-  sample: # This is the name of the workflow, feel free to change it to better match your workflow.
-    # Inside the workflow, you define the jobs you want to run.
+  deployment:
     jobs:
-      - build-and-test
+      - sonarqube:
+          name: sonarqube
+          filters:
+            branches:
+              ignore:  # 下記の正規表現フィルターにマッチするブランチのみが実行される
+                - /master/
+                - /TMN-master/
+      - build-application:
+          context: DEPLOYER
+          name: build-application
+          # TODO：他のブランチで作業のため一旦コメントします
+          filters:  # ブランチ全体にマッチさせる正規表現フィルターを使う
+            branches:
+              only:  # 下記の正規表現フィルターにマッチするブランチのみが実行される
+                - /master/
+      - aws-ecr/build-and-push-image:
+          name: aws-ecr/build-and-push-image
+          context: DEVELOP
+          filters:  # ブランチ全体にマッチさせる正規表現フィルターを使う
+            branches:
+              only:  # 下記の正規表現フィルターにマッチするブランチのみが実行される
+                - /master/
+          account-url: AWS_ECR_ACCOUNT_URL
+          repo: "${AWS_RESOURCE_NAME_PREFIX}"
+          region: AWS_DEFAULT_REGION
+          tag: "${CIRCLE_SHA1}"
+          requires:
+            - build-application
+      - deploy-application:
+          name: deploy-application
+          filters:  # ブランチ全体にマッチさせる正規表現フィルターを使う
+            branches:
+              only:  # 下記の正規表現フィルターにマッチするブランチのみが実行される
+                - /master/
+          cluster-name: "${CLUSTER_NAME}"
+          aws-region: ${AWS_DEFAULT_REGION}
+          docker-image-name: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${AWS_RESOURCE_NAME_PREFIX}:${CIRCLE_SHA1}"
+          version-info: "${CIRCLE_SHA1}"
+          resource-name: "${RESOURCE_NAME}"
+          requires:
+            - aws-ecr/build-and-push-image
+
+      # - aws-ecr/build-and-push-image:
+      #     name: aws-ecr/tmn-build-and-push-image
+      #     # filters:  # ブランチ全体にマッチさせる正規表現フィルターを使う
+      #     #   branches:
+      #     #     only:  # 下記の正規表現フィルターにマッチするブランチのみが実行される
+      #     #       - /TMN-master/
+      #     account-url: AWS_ECR_ACCOUNT_URL
+      #     repo: "${TMN_AWS_RESOURCE_NAME_PREFIX}"
+      #     region: AWS_DEFAULT_REGION
+      #     tag: "${CIRCLE_SHA1}"
+      #     requires:
+      #       - deploy-application
+      # - deploy-application:
+      #     name: tmn-deploy-application
+      #     # filters:  # ブランチ全体にマッチさせる正規表現フィルターを使う
+      #     #   branches:
+      #     #     only:  # 下記の正規表現フィルターにマッチするブランチのみが実行される
+      #     #       - /TMN-master/
+      #     cluster-name: "${TMN_CLUSTER_NAME}"
+      #     aws-region: ${AWS_DEFAULT_REGION}
+      #     docker-image-name: "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${TMN_AWS_RESOURCE_NAME_PREFIX}:${CIRCLE_SHA1}"
+      #     version-info: "${CIRCLE_SHA1}"
+      #     requires:
+      #       - aws-ecr/tmn-build-and-push-image
