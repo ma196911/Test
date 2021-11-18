@@ -3,47 +3,7 @@ orbs:
   aws-ecr: circleci/aws-ecr@6.15.2
   aws-eks: circleci/aws-eks@1.0.3
   kubernetes: circleci/kubernetes@0.11.2
-
-jobs:
-  sonarqube:
-    environment:
-    working_directory: /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}
-    docker:
-      - image: circleci/openjdk:11.0.3-jdk-stretch
-    steps:
-      - checkout
-      - run:
-          name: analyze by SonarQube
-          command: |
-            chmod 777 ./gradlew
-            ./gradlew sonarqube -x test \
-            -Dsonar.projectKey=circlecitest \
-            -Dsonar.host.url=http://18.180.83.54:9000 \
-            -Dsonar.login=666c0555b1477843e299d22d1f3c87ef9ee49198
-      - run:
-          name: get status
-          command: |
-            curl -u admin:R9YtPPv2As2V "http://18.180.83.54:9000/api/qualitygates/project_status?projectKey=circlecitest" > status
-            grep -wq "ERROR" status && SONARQUBE_STATUS="Failed" || SONARQUBE_STATUS="Success"
-            mkdir workspace
-            echo $SONARQUBE_STATUS > workspace/step
-            echo $SONARQUBE_STATUS
-      - persist_to_workspace:
-          root: workspace
-          paths:
-            - step
-      - attach_workspace:
-          at: /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace
-      - run:
-          name: Send Success Result To GitHub
-          command: |
-            export STATUS=$(cat /tmp/github.com/{{ORG_NAME}}/{{REPO_NAME}}/workspace/step)
-            ./.circleci/SonarQubeGitHub.sh ${GITHUB_ACCESSTOKEN} success circlecitest $STATUS
-      - run:
-          name: Send Failed Result To GitHub
-          command: |
-            ./.circleci/SonarQubeGitHub.sh ${GITHUB_ACCESSTOKEN} failure circlecitest $STATUS
-          when: on_fail
+  
   build-application:
     parallelism: 1
     environment:
