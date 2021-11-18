@@ -168,13 +168,6 @@ orbs:
 workflows:
   deployment:
     jobs:
-      - sonarqube:
-          name: sonarqube
-          filters:
-            branches:
-              ignore:  # 下記の正規表現フィルターにマッチするブランチのみが実行される
-                - /master/
-                - /TMN-master/
       - build-application:
           context: DEPLOYER
           name: build-application
