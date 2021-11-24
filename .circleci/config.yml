@@ -29,7 +29,6 @@ workflows:
               only: /^v.*/
           requires:
             - test
-            - slack/on-hold
           type: approval
       - deploy:
           filters:
