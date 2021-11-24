@@ -1,38 +1,27 @@
-version: '2.1'
-orbs:
-  slack: circleci/slack@4.1
+version: 2
 jobs:
-  deploy:
+  build:
     docker:
-      - image: 'cimg/base:stable'
+      - image: circleci/<language>:<version TAG>
+        auth:
+          username: mydockerhub-user
+          password: $DOCKERHUB_PASSWORD  # context / project UI env-var reference
     steps:
-      - run: echo "deploy my app"
-      - slack/notify:
-          event: fail
-          mentions: '@Mayubo'
-          template: basic_fail_1
-      - slack/notify:
-          event: pass
-          template: success_tagged_deploy_1
+      - checkout
+      - run: <command>
   test:
     docker:
-      - image: 'cimg/base:stable'
+      - image: circleci/<language>:<version TAG>
+        auth:
+          username: mydockerhub-user
+          password: $DOCKERHUB_PASSWORD  # context / project UI env-var reference
     steps:
-      - run: echo "test my app"
+      - checkout
+      - run: <command>
 workflows:
-  test-and-deploy:
+  version: 2
+  build_and_test: # < ワークフローに関して Slack 通知とメール通知が送信されます
     jobs:
-      - test  
-      - pause_workflow:
-          filters:
-            tags:
-              only: /^v.*/
-          requires:
-            - test
-          type: approval
-      - deploy:
-          filters:
-            tags:
-              only: /^v.*/
-          requires:
-            - pause_workflow
+    # IRC インテグレーションによってジョブごとの通知が送信されます
+      - build
+      - test
