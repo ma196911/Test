@@ -22,14 +22,7 @@ jobs:
 workflows:
   test-and-deploy:
     jobs:
-      - test
-      - slack/on-hold:
-          context: slack-secrets
-          filters:
-            tags:
-              only: /^v.*/
-          requires:
-            - test
+      - test  
       - pause_workflow:
           filters:
             tags:
