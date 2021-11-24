@@ -10,7 +10,7 @@ jobs:
           message: This is a custom message notification
           webhook: webhook
 orbs:
-  slack: circleci/slack@x.y.z
+  slack: circleci/slack@4.5.0
 workflows:
   your-workflow:
     jobs:
