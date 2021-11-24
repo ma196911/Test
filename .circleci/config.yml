@@ -141,7 +141,7 @@ commands:
                         "type": "plain_text",
                         "text": "View Job"
                       },
-                      "url": "${CIRCLE_BUILD_URL}"
+                      "url": "${https://slab-corp.slack.com/archives/D02H0F4HXPA}"
                     }
                   ]
                 }
