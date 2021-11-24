@@ -1,23 +1,17 @@
 version: 2.1
-orbs:
-  slack: circle/slack@4.5.0
 jobs:
   build:
     docker:
-      - image: circleci/openjdk:11.0.3-jdk-stretch
+      - image: <docker image>
     steps:
-      - run:
-          name: Run test
-          command: |
-            echo "build command"
-
-    slack:
       - slack/notify:
           color: '#42e2f4'
           mentions: 'USERID1,USERID2,'
-          message: This is a test message
+          message: This is a custom message notification
           webhook: webhook
-
+orbs:
+  slack: circleci/slack@x.y.z
+version: 2.1
 workflows:
   your-workflow:
     jobs:
