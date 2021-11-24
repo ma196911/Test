@@ -6,7 +6,7 @@ executors:
       - image: circleci/python:3.8.7
 
 orbs:
-  slack: circleci/slack@4.3.0
+  slack: circleci/slack@4.2.0
 
 commands:
   lint_and_unit_test:
